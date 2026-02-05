@@ -1,108 +1,76 @@
 <?php
-require_once "db.php";
 
+define("DATA_FILE", __DIR__ . "/../data/taches.json");
+
+
+function lireTaches() {
+    if (!file_exists(DATA_FILE)) {
+        file_put_contents(DATA_FILE, json_encode([]));
+    }
+    return json_decode(file_get_contents(DATA_FILE), true);
+}
+
+function ecrireTaches($taches) {
+    file_put_contents(DATA_FILE, json_encode($taches, JSON_PRETTY_PRINT));
+}
 
 
 function getTaches() {
-    global $pdo;
-    $sql = "SELECT *,
-            (date_limite < CURDATE() AND statut != 'terminee') AS en_retard
-            FROM taches
-            ORDER BY id DESC";
-    $stmt = $pdo->query($sql);
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    return array_reverse(lireTaches());
 }
 
 function getTacheById($id) {
-    global $pdo;
-    $stmt = $pdo->prepare("SELECT * FROM taches WHERE id = ?");
-    $stmt->execute([$id]);
-    return $stmt->fetch(PDO::FETCH_ASSOC);
+    foreach (lireTaches() as $t) {
+        if ($t["id"] == $id) return $t;
+    }
+    return null;
 }
 
 function addTache($titre, $description, $priorite, $date_limite, $responsable) {
-    global $pdo;
-    $sql = "INSERT INTO taches
-            (titre, description, priorite, statut, date_creation, date_limite, responsable)
-            VALUES (?, ?, ?, 'a_faire', CURDATE(), ?, ?)";
-    $stmt = $pdo->prepare($sql);
-    return $stmt->execute([
-        $titre, $description, $priorite, $date_limite, $responsable
-    ]);
-}
+    $taches = lireTaches();
 
-function updateTache($id, $titre, $description, $priorite, $date_limite, $responsable) {
-    global $pdo;
-    $sql = "UPDATE taches
-            SET titre = ?, description = ?, priorite = ?, date_limite = ?, responsable = ?
-            WHERE id = ? AND statut != 'terminee'";
-    $stmt = $pdo->prepare($sql);
-    return $stmt->execute([
-        $titre, $description, $priorite, $date_limite, $responsable, $id
-    ]);
+    $taches[] = [
+        "id" => time(),
+        "titre" => $titre,
+        "description" => $description,
+        "priorite" => $priorite,
+        "statut" => "a_faire",
+        "date_creation" => date("Y-m-d"),
+        "date_limite" => $date_limite,
+        "responsable" => $responsable
+    ];
+
+    ecrireTaches($taches);
 }
 
 function changerStatut($id) {
-    global $pdo;
+    $taches = lireTaches();
 
-    $stmt = $pdo->prepare("SELECT statut FROM taches WHERE id = ?");
-    $stmt->execute([$id]);
-    $tache = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$tache) return;
-
-    if ($tache["statut"] === "a_faire") {
-        $new = "en_cours";
-    } elseif ($tache["statut"] === "en_cours") {
-        $new = "terminee";
-    } else {
-        return;
+    foreach ($taches as &$t) {
+        if ($t["id"] == $id) {
+            if ($t["statut"] === "a_faire") $t["statut"] = "en_cours";
+            elseif ($t["statut"] === "en_cours") $t["statut"] = "terminee";
+        }
     }
 
-    $update = $pdo->prepare("UPDATE taches SET statut = ? WHERE id = ?");
-    $update->execute([$new, $id]);
+    ecrireTaches($taches);
 }
 
 function deleteTache($id) {
-    global $pdo;
-    $stmt = $pdo->prepare("DELETE FROM taches WHERE id = ?");
-    $stmt->execute([$id]);
+    $taches = array_filter(lireTaches(), fn($t) => $t["id"] != $id);
+    ecrireTaches(array_values($taches));
 }
 
 
 function statsDashboard() {
-    global $pdo;
+    $taches = lireTaches();
+    $total = count($taches);
+    $terminees = count(array_filter($taches, fn($t) => $t["statut"] === "terminee"));
+    $retard = count(array_filter($taches, fn($t) =>
+        $t["statut"] !== "terminee" && $t["date_limite"] < date("Y-m-d")
+    ));
 
-    $total = $pdo->query("SELECT COUNT(*) FROM taches")->fetchColumn();
-    $terminees = $pdo->query("SELECT COUNT(*) FROM taches WHERE statut = 'terminee'")->fetchColumn();
-    $retard = $pdo->query("
-        SELECT COUNT(*) FROM taches
-        WHERE statut != 'terminee' AND date_limite < CURDATE()
-    ")->fetchColumn();
+    $pourcentage = $total ? round(($terminees / $total) * 100, 2) : 0;
 
-    $pourcentage = ($total > 0) ? round(($terminees / $total) * 100, 2) : 0;
-
-    return [
-        "total" => $total,
-        "terminees" => $terminees,
-        "retard" => $retard,
-        "pourcentage" => $pourcentage
-    ];
-}
-
-function getStatsDashboard() {
-    global $pdo;
-
-    $total = $pdo->query("SELECT COUNT(*) FROM taches")->fetchColumn();
-    $terminees = $pdo->query("SELECT COUNT(*) FROM taches WHERE statut='terminee'")->fetchColumn();
-    $retard = $pdo->query("SELECT COUNT(*) FROM taches WHERE date_limite < CURDATE() AND statut!='terminee'")->fetchColumn();
-
-    $pourcentage = $total > 0 ? round(($terminees / $total) * 100) : 0;
-
-    return [
-        "total" => $total,
-        "terminees" => $terminees,
-        "retard" => $retard,
-        "pourcentage" => $pourcentage
-    ];
+    return compact("total", "terminees", "retard", "pourcentage");
 }
